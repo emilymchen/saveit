@@ -1,0 +1,29 @@
+{
+  "name": "saveit-ingest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Instagram DM ingestion server for SaveIt",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "dev": "tsx watch --env-file=.env src/index.ts",
+    "build": "tsc",
+    "start": "node --env-file=.env dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "webhook:test": "node --env-file=.env scripts/send-test-webhook.mjs",
+    "events": "node scripts/inspect-events.mjs",
+    "tunnel": "./.tools/cloudflared tunnel --url http://localhost:3000"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
