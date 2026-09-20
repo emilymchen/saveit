@@ -12,19 +12,43 @@ export type NormalizeResult =
 
 const URL_PATTERN = /https?:\/\/[^\s<>"')]+/gi;
 
-function classifyLink(url: string): SharedLink['platform'] {
-  let host: string;
+/** Hosts that serve raw media bytes rather than a page we would have to read. */
+const MEDIA_HOSTS = [
+  'cdninstagram.com',
+  'fbcdn.net',
+  'fbsbx.com', // lookaside.fbsbx.com serves DM attachment media
+  'tiktokcdn.com',
+  'tiktokcdn-us.com',
+];
+
+function classifyLink(url: string): Pick<SharedLink, 'platform' | 'kind'> {
+  let parsed: URL;
   try {
-    host = new URL(url).hostname.toLowerCase();
+    parsed = new URL(url);
   } catch {
-    return 'other';
+    return { platform: 'other', kind: 'other' };
   }
+  const host = parsed.hostname.toLowerCase();
   // Match on exact host or subdomain boundary so "nottiktok.com" is not a match.
   const matches = (domain: string) => host === domain || host.endsWith(`.${domain}`);
 
-  if (matches('instagram.com') || matches('instagr.am')) return 'instagram';
-  if (matches('tiktok.com')) return 'tiktok';
-  return 'other';
+  const isInstagram = matches('instagram.com') || matches('instagr.am');
+  const isTiktok = matches('tiktok.com');
+
+  const platform: SharedLink['platform'] = isInstagram
+    ? 'instagram'
+    : isTiktok
+      ? 'tiktok'
+      : 'other';
+
+  if (MEDIA_HOSTS.some(matches)) return { platform, kind: 'media' };
+  if (isInstagram && /^\/(p|reel|reels|tv)\//i.test(parsed.pathname)) {
+    return { platform, kind: 'permalink' };
+  }
+  if (isTiktok && parsed.pathname.includes('/video/')) {
+    return { platform, kind: 'permalink' };
+  }
+  return { platform, kind: 'other' };
 }
 
 /** Trailing punctuation is almost always sentence punctuation, not part of the URL. */
@@ -41,7 +65,7 @@ function extractLinks(event: IgMessagingEvent): SharedLink[] {
     const url = trimTrailingPunctuation(rawUrl.trim());
     if (!url || seen.has(url)) return;
     seen.add(url);
-    links.push({ url, platform: classifyLink(url), source });
+    links.push({ url, ...classifyLink(url), source });
   };
 
   for (const match of event.message?.text?.match(URL_PATTERN) ?? []) {

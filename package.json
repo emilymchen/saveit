@@ -12,13 +12,16 @@
     "build": "tsc",
     "start": "node --env-file=.env dist/index.js",
     "typecheck": "tsc --noEmit",
+    "test": "NODE_ENV=test IG_VERIFY_TOKEN=test META_APP_SECRET=test tsx --test 'src/**/*.test.ts'",
+    "parse": "tsx --env-file=.env scripts/parse-file.ts",
     "webhook:test": "node --env-file=.env scripts/send-test-webhook.mjs",
     "events": "node scripts/inspect-events.mjs",
     "tunnel": "./.tools/cloudflared tunnel --url http://localhost:3000"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.127.0",
     "express": "^5.1.0",
-    "zod": "^3.24.1"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

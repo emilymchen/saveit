@@ -14,6 +14,10 @@ const schema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((v) => v === 'true'),
+  // Both optional so the server still boots and captures raw events during Meta
+  // webhook setup, before any parsing keys exist. Parsing skips itself instead.
+  ANTHROPIC_API_KEY: z.string().optional(),
+  GOOGLE_MAPS_API_KEY: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
