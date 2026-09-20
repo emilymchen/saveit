@@ -1,4 +1,5 @@
 import { logger } from '../lib/logger.js';
+import { parseMessage } from '../parse/index.js';
 import { isDuplicate } from './dedupe.js';
 import { extractEvents, normalizeEvent } from './normalize.js';
 import type { IgWebhookBody, NormalizedMessage } from './types.js';
@@ -54,10 +55,8 @@ export async function processWebhookBody(body: IgWebhookBody): Promise<void> {
  * The seam where the rest of the pipeline plugs in.
  *
  * Next milestones, in order:
- *   1. upsert the sender (IGSID) and persist this message to Supabase
- *   2. send the links + attachment media to OpenAI for structured extraction
- *   3. resolve the extracted place name via Google Places
- *   4. write the finished record to `saves`, then DM the user a confirmation
+ *   1. upsert the sender (IGSID) and persist the message + result to Supabase
+ *   2. DM the sender a confirmation, or a question when needsFollowup is set
  */
 async function handleMessage(message: NormalizedMessage): Promise<void> {
   logger.info('inbound DM', {
@@ -66,7 +65,24 @@ async function handleMessage(message: NormalizedMessage): Promise<void> {
     sentAt: message.sentAt.toISOString(),
     text: message.text,
     attachments: message.attachments.map((a) => a.type),
-    links: message.links.map((l) => `${l.platform}:${l.url}`),
+    links: message.links.map((l) => `${l.platform}/${l.kind}:${l.url}`),
     isStoryReply: message.isStoryReply,
   });
+
+  const result = await parseMessage(message);
+
+  if (result.needsFollowup) {
+    logger.info('save needs follow-up', { mid: message.mid, reason: result.reason });
+    return;
+  }
+
+  for (const { candidate, resolved } of result.places) {
+    logger.info('parsed save', {
+      mid: message.mid,
+      name: resolved?.name ?? candidate.placeName,
+      address: resolved?.address ?? null,
+      placeId: resolved?.placeId ?? null,
+      evidence: candidate.evidence,
+    });
+  }
 }

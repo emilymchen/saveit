@@ -9,13 +9,24 @@
 
 export interface IgAttachmentPayload {
   url?: string;
+  /**
+   * Documented on ig_post / ig_reel / fallback, but Meta only calls it "Title of
+   * the attachment" — never the caption, and the Instagram-specific docs claim
+   * only the URL is delivered. Treat as opportunistic; never depend on it.
+   */
   title?: string;
-  /** Present on reshared posts/reels: the IG media id, when Meta chooses to include it. */
+  /** Media id, on post / ig_post. */
   id?: string;
+  /** On reel / ig_reel. */
+  reel_video_id?: string;
 }
 
 export interface IgAttachment {
-  /** image | video | audio | file | share | story_mention | ig_reel | template | fallback */
+  /**
+   * Meta's documented set: audio | file | image | sticker | video | fallback |
+   * reel | ig_reel | post | ig_post | appointment_booking | template.
+   * Note there is no "share" type, despite it being an obvious guess.
+   */
   type?: string;
   payload?: IgAttachmentPayload;
 }
@@ -60,6 +71,12 @@ export interface SharedLink {
   url: string;
   platform: 'instagram' | 'tiktok' | 'other';
   source: 'text' | 'attachment';
+  /**
+   * `media` is bytes we can fetch and look at; `permalink` is a page we cannot
+   * read (Instagram login-walls non-browser clients). This split decides whether
+   * the parser has anything to work with.
+   */
+  kind: 'media' | 'permalink' | 'other';
 }
 
 /**

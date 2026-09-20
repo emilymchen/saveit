@@ -3,15 +3,26 @@
 Receives Instagram DM webhooks from Meta, verifies them, and normalizes each
 message into a single shape the rest of the pipeline consumes.
 
-This is **Step 1** of the SaveIt pipeline:
-
 ```
-user DMs a post  ->  [ Meta webhook ]  ->  THIS SERVER  ->  AI parsing  ->  place resolution  ->  Supabase  ->  iOS app
-                                          ^^^^^^^^^^^
+user DMs a post  ->  [ Meta webhook ]  ->  THIS SERVER  ->  Supabase  ->  iOS app
+                                          ^^^^^^^^^^^^
+                                   ingest + AI parsing + place resolution
 ```
 
-AI parsing, place resolution and persistence are not built yet. They plug in at
-`handleMessage()` in [src/ingest/process.ts](src/ingest/process.ts).
+Ingestion, parsing and place resolution are built. Persistence and the
+confirmation DM back to the sender are not — they plug in at `handleMessage()`
+in [src/ingest/process.ts](src/ingest/process.ts).
+
+**The video is the signal.** Meta delivers no caption: the attachment `title`
+field is documented but undefined as a caption, and the Instagram-specific docs
+say [only a URL is
+delivered](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api).
+So the place name is read off the pixels — storefront signage, text overlays,
+the name card at the end of a reel. Text is opportunistic enrichment.
+
+The model is never asked for a street address; it returns a name and location
+hints, and Google Places resolves those to a verified address. A hallucinated
+address is the worst failure this product can have.
 
 ## Setup
 
@@ -27,6 +38,17 @@ Two secrets are required:
 | `IG_VERIFY_TOKEN` | You invent it. Generate with `openssl rand -hex 32`, then paste the same value into the Meta App Dashboard when subscribing the webhook. |
 | `META_APP_SECRET` | Meta App Dashboard → App settings → Basic → App Secret. |
 
+Parsing needs two more. Both are optional — without them the server still
+ingests and logs DMs, and parsing skips itself:
+
+| Variable | Where it comes from |
+| --- | --- |
+| `ANTHROPIC_API_KEY` | https://console.anthropic.com/settings/keys |
+| `GOOGLE_MAPS_API_KEY` | Google Cloud console, with **Places API (New)** enabled. |
+
+Video frame extraction needs `ffmpeg` on the PATH (`brew install ffmpeg`).
+Without it, images still work and videos are skipped.
+
 `IG_ACCESS_TOKEN` is only needed later, when the bot starts replying to users.
 
 ## Running
@@ -34,22 +56,51 @@ Two secrets are required:
 ```bash
 npm run dev        # watch mode on http://localhost:3000
 npm run typecheck
+npm test
 npm run build && npm start
 ```
+
+## Parsing a post without Meta
+
+The fastest loop for tuning the parser. Download a real reel or post, point the
+CLI at the file, and see what comes back — no Meta app, no tunnel, no webhook:
+
+```bash
+npm run parse -- ./fixtures/tacos.mp4
+npm run parse -- ./fixtures/tacos.mp4 --note "need to try this"
+npm run parse -- ./fixtures/tacos.mp4 --dry-run   # print the request, spend nothing
+```
+
+A sidecar `tacos.mp4.json` of `{ "title": "...", "note": "..." }` is picked up
+automatically, so a fixture can carry its real caption alongside it.
+
+A bare Instagram URL will not work here — Instagram login-walls non-browser
+clients, which is the same reason we cannot fetch captions. Download the file.
 
 ## Testing without Meta
 
 `scripts/send-test-webhook.mjs` sends correctly-signed fake payloads at the local
 server, so you can exercise the whole loop before any Meta wiring exists:
 
+Fixture shapes follow [Meta's documented attachment
+payloads](https://developers.facebook.com/docs/messenger-platform/reference/webhook-events/messages/):
+`ig_post` carries `{url, title, id}`, `ig_reel` carries `{url, title,
+reel_video_id}`, and a pasted link arrives as `fallback` with `{url, title}`.
+Note there is no `share` attachment type, despite it being an obvious guess.
+
 ```bash
-npm run webhook:test -- share            # a reshared post (the common real case)
-npm run webhook:test -- text             # a pasted TikTok link with a user note
-npm run webhook:test -- reel             # a shared reel
+npm run webhook:test -- post             # reshared post: media url + title
+npm run webhook:test -- post-bare        # reshared post: bare permalink, no title
+npm run webhook:test -- reel             # reshared reel
+npm run webhook:test -- link             # pasted TikTok link with a user note
 npm run webhook:test -- echo             # our own message reflected back; must be ignored
 npm run webhook:test -- empty            # nothing extractable; must be skipped
-npm run webhook:test -- share --bad-signature   # must be rejected with 403
+npm run webhook:test -- post --bad-signature    # must be rejected with 403
 ```
+
+`post-bare` is the genuinely unresolvable case: no title, a permalink we cannot
+read, and no note from the sender. It must report `needsFollowup` cleanly rather
+than inventing something.
 
 Verified behavior as of the initial commit:
 
@@ -57,7 +108,7 @@ Verified behavior as of the initial commit:
 | --- | --- |
 | GET handshake, correct token | `200`, challenge echoed as plain text |
 | GET handshake, wrong token | `403` |
-| Signed `share` / `text` / `reel` | `200`, normalized and logged |
+| Signed `post` / `reel` / `link` | `200`, normalized and logged |
 | `is_echo` message | skipped (`reason: echo`) |
 | Message with no text, link or attachment | skipped (`reason: empty`) |
 | Forged signature | `403`, no processing |
@@ -97,9 +148,17 @@ src/
     normalize.ts        envelope -> NormalizedMessage, with skip rules
     dedupe.ts           process-local mid guard against Meta retries
     rawEvents.ts        raw payload capture for parser design
-    process.ts          async pipeline; where AI + DB plug in
+    process.ts          async pipeline; where the DB plugs in
+  parse/
+    signals.ts          NormalizedMessage -> SignalBundle
+    media.ts            fetch + ffmpeg frames, behind a host allowlist
+    extract.ts          one Claude call -> place name + location hints
+    resolve.ts          Google Places -> verified address, name-match guarded
+    index.ts            orchestration; entered from handleMessage()
 scripts/
   send-test-webhook.mjs signed local payload generator
+  parse-file.ts         run the parser against a local post file
+  inspect-events.mjs    pretty-print captured raw payloads
 ```
 
 ## Design notes
@@ -120,6 +179,25 @@ the bot respond to itself.
 **Dedupe is currently process-local.** `dedupe.ts` is an in-memory TTL map; it
 does not survive a restart or span instances. The durable guard is a `UNIQUE`
 constraint on the message id in Postgres, added when persistence lands.
+
+**We do not scrape Instagram for captions.** Fetching `og:description` off a
+permalink would often yield a truncated caption, and was considered and
+rejected: it breaches Instagram's ToS, gets login-walled from datacenter IPs,
+and needs crawler user-agent spoofing to work reliably. Reading the video frames
+is both legitimate and more accurate. `instagram_oembed` is not an alternative —
+it returns only `html`, `provider_name`, `provider_url`, `type`, `version` and
+`width`.
+
+**Media fetches use a host allowlist, not a blocklist.** The URLs in
+`media.ts` arrive inside an external webhook payload, so anything other than a
+known Meta or TikTok CDN host is refused outright — otherwise the server
+becomes a request-forgery primitive aimed at whatever is reachable from it.
+
+**Places is asked to confirm, not to search.** Text Search answers almost any
+query with something confident-looking, so a miss is indistinguishable from a
+hit. `resolve.ts` requires the returned name to share at least half its words
+with the extracted name. Saving a real address for the wrong restaurant is the
+one failure a user would never think to double-check.
 
 **IGSID is not a user id.** `senderIgsid` identifies an Instagram user *scoped to
 this app*. It is not an email and does not map to a Supabase `auth.uid` without an

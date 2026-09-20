@@ -2,6 +2,8 @@ node_modules/
 dist/
 data/
 .tools/
+# Downloaded posts used to tune the parser — other people's media, often large.
+fixtures/
 .env
 .env.local
 *.log
