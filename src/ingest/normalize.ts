@@ -95,8 +95,7 @@ export function normalizeEvent(event: IgMessagingEvent): NormalizeResult {
       mid,
       senderIgsid,
       recipientIgsid,
-      // Meta sends epoch milliseconds; fall back to arrival time if absent.
-      sentAt: new Date(event.timestamp ?? Date.now()),
+      sentAt: parseEventTimestamp(event.timestamp),
       text,
       attachments,
       links,
@@ -106,7 +105,31 @@ export function normalizeEvent(event: IgMessagingEvent): NormalizeResult {
   };
 }
 
-/** Flatten a webhook body into its individual messaging events. */
+/**
+ * Flatten a webhook body into its individual messaging events.
+ *
+ * Handles both delivery envelopes: Messenger-style `entry[].messaging[]`, and
+ * the Graph API "changes" style used by the standalone Instagram API, where
+ * the event lives at `entry[].changes[].value` under `field: "messages"`.
+ */
 export function extractEvents(body: IgWebhookBody): IgMessagingEvent[] {
-  return (body.entry ?? []).flatMap((entry) => entry.messaging ?? []);
+  return (body.entry ?? []).flatMap((entry) => [
+    ...(entry.messaging ?? []),
+    ...(entry.changes ?? [])
+      .filter((change) => change.field === 'messages' && change.value)
+      .map((change) => change.value as IgMessagingEvent),
+  ]);
+}
+
+/**
+ * Meta's timestamp field is inconsistent across envelopes: epoch milliseconds
+ * as a number on Messenger-style delivery, epoch *seconds* as a string on the
+ * "changes"-style envelope. Anything under 1e12 cannot be milliseconds since
+ * that would predate the epoch's early years by decades, so treat it as seconds.
+ */
+function parseEventTimestamp(timestamp: number | string | undefined): Date {
+  if (timestamp === undefined) return new Date();
+  const n = typeof timestamp === 'string' ? Number(timestamp) : timestamp;
+  if (!Number.isFinite(n)) return new Date();
+  return new Date(n < 1e12 ? n * 1000 : n);
 }

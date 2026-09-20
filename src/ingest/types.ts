@@ -1,8 +1,14 @@
 /**
  * Shapes for the Instagram Messaging webhook.
  *
- * Note that Instagram DM events use the Messenger-style `entry[].messaging[]`
- * envelope, NOT the `entry[].changes[]` envelope used by comment/mention events.
+ * Two different envelopes carry the same inner event shape, depending on which
+ * Instagram product delivered it:
+ *   - Messenger-style: `entry[].messaging[]` — used by Instagram via Facebook Login.
+ *   - Graph API "changes" style: `entry[].changes[]` with `field: "messages"` and
+ *     the event under `.value` — used by the standalone Instagram API (Instagram
+ *     Login / Instagram Business Login). Confirmed against a real webhook payload
+ *     from the Meta dashboard's "Test" sender.
+ * `extractEvents` in normalize.ts flattens both into the same event shape.
  * Everything here is optional because Meta adds fields without warning; the
  * normalizer is responsible for deciding what is usable.
  */
@@ -35,7 +41,9 @@ export interface IgMessage {
 export interface IgMessagingEvent {
   sender?: { id?: string };
   recipient?: { id?: string };
-  timestamp?: number;
+  // Messenger-style delivery sends epoch milliseconds as a number; the
+  // "changes"-style envelope (see below) sends epoch seconds as a string.
+  timestamp?: number | string;
   message?: IgMessage;
   /** Present on read/delivery/reaction/postback events, which we ignore for now. */
   read?: unknown;
@@ -44,10 +52,17 @@ export interface IgMessagingEvent {
   postback?: unknown;
 }
 
+/** One entry in the Graph API "changes" envelope; `value` shares IgMessagingEvent's shape when field is "messages". */
+export interface IgChange {
+  field?: string;
+  value?: IgMessagingEvent;
+}
+
 export interface IgEntry {
   id?: string;
   time?: number;
   messaging?: IgMessagingEvent[];
+  changes?: IgChange[];
 }
 
 export interface IgWebhookBody {
