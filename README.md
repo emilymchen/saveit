@@ -36,7 +36,7 @@ Two secrets are required:
 | Variable | Where it comes from |
 | --- | --- |
 | `IG_VERIFY_TOKEN` | You invent it. Generate with `openssl rand -hex 32`, then paste the same value into the Meta App Dashboard when subscribing the webhook. |
-| `META_APP_SECRET` | Meta App Dashboard → App settings → Basic → App Secret. |
+| `META_APP_SECRET` | **Depends on the Instagram product.** Standalone Instagram API with Instagram Login (no linked Facebook Page): App Dashboard → Use cases → Instagram API → "Instagram app secret" — a *different* value from the one below. Instagram via Facebook Login: App Dashboard → App settings → Basic → App Secret. See [Design notes](#design-notes). |
 
 Parsing needs two more. Both are optional — without them the server still
 ingests and logs DMs, and parsing skips itself:
@@ -203,3 +203,26 @@ one failure a user would never think to double-check.
 this app*. It is not an email and does not map to a Supabase `auth.uid` without an
 explicit account-linking flow. Saves will need to key on IGSID until a user links
 their account.
+
+**The standalone Instagram API signs with a different secret than Basic
+Settings.** An app set up via Use cases → Instagram API (Instagram Login, no
+Facebook Page) has *two* app secrets: the classic one on App settings → Basic,
+and a separate "Instagram app secret" on the Instagram API use case page. Meta
+signs Instagram DM webhook deliveries with the latter. Using the former passes
+every sanity check — same App ID, secret copies character-for-character,
+request body parses as valid JSON — and still produces a signature that never
+matches, because HMAC is correct on both ends but keyed differently. Confirmed
+by replaying a captured real payload through the signature check with each
+secret; only the Instagram-specific one produces a match.
+
+**Two different webhook envelopes carry the same event.** Instagram via
+Facebook Login delivers DMs as `entry[].messaging[]` (Messenger Platform
+style). The standalone Instagram API (Instagram Login) delivers the identical
+event data wrapped in the older, generic Graph API envelope instead:
+`entry[].changes[]` with `field: "messages"` and the event under `.value`. Same
+inner shape (`sender`, `recipient`, `message.text`, …), different wrapper, and
+which one arrives is dictated entirely by which product the app uses — not
+something we chose. `extractEvents()` in `normalize.ts` flattens both. The
+`changes` envelope also sends `timestamp` as a numeric *string* in epoch
+*seconds*, versus a `number` in epoch milliseconds on the `messaging` envelope;
+`parseEventTimestamp()` normalizes both.

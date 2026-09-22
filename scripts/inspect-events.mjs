@@ -52,9 +52,22 @@ function isCdnMedia(url) {
   return /cdninstagram\.com|fbcdn\.net|tiktokcdn/i.test(url);
 }
 
+/**
+ * Mirrors extractEvents() in src/ingest/normalize.ts: real deliveries from the
+ * standalone Instagram API (Instagram Login) arrive as entry[].changes[] with
+ * field "messages", not the Messenger-style entry[].messaging[]. Both are
+ * flattened here so captured real-world events show up, not just fixtures.
+ */
+function extractEvents(body) {
+  return (body.entry ?? []).flatMap((e) => [
+    ...(e.messaging ?? []),
+    ...(e.changes ?? []).filter((c) => c.field === 'messages' && c.value).map((c) => c.value),
+  ]);
+}
+
 function describe(record, index) {
   const body = record.body ?? record;
-  const events = (body.entry ?? []).flatMap((e) => e.messaging ?? []);
+  const events = extractEvents(body);
 
   for (const ev of events) {
     const m = ev.message ?? {};
