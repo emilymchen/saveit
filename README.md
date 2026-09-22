@@ -133,6 +133,45 @@ With `PERSIST_RAW_EVENTS=true`, every payload is appended to
 `data/raw-events.jsonl` (gitignored). Collect real shares there before designing
 the AI parser — `share`, `ig_reel` and story replies all differ.
 
+## Deploying
+
+Running `npm run dev` behind a tunnel (ngrok/cloudflared) is fine for local
+iteration, but nothing is actually listening once your laptop sleeps, loses
+network, or the terminal closes — a DM sent during that window is simply
+lost, since Meta retries for a while on its own backoff and then gives up.
+
+`render.yaml` in the repo root is a [Render](https://render.com) Blueprint
+that gives you a permanent, laptop-independent URL on the free tier:
+
+1. Push this repo to GitHub (already done if you're reading this from there).
+2. In the Render dashboard: **New +** → **Blueprint** → point it at this repo.
+   Render reads `render.yaml` and configures the build (`npm install && npm
+   run build`) and start (`npm start`) commands automatically.
+3. When prompted, fill in the secret env vars (`IG_VERIFY_TOKEN`,
+   `META_APP_SECRET`, `IG_ACCESS_TOKEN`, `ANTHROPIC_API_KEY`,
+   `GOOGLE_MAPS_API_KEY`) with the same values as your local `.env`.
+4. Deploy. You get a permanent URL like `https://saveit-ingest.onrender.com`.
+5. Update the Meta App Dashboard callback URL to
+   `https://saveit-ingest.onrender.com/webhook`, save (re-triggers the GET
+   handshake), and confirm the `messages` field is still subscribed.
+6. You can now stop the tunnel and the local dev server — Meta talks directly
+   to Render from here on.
+
+**Free-tier cold starts are a real tradeoff, not a non-issue.** Render's free
+plan sleeps the service after 15 minutes of no traffic; the first request
+after that takes ~30-50s to wake it, which risks that specific delivery
+timing out. Meta retries on timeout, and the retry almost always lands after
+the wake-up completes, so in practice a DM sent to a cold instance usually
+still gets through on the second attempt — but it is not instant, and it is
+not guaranteed. If that's ever not good enough, moving to a paid always-on
+plan (Render or otherwise) removes the wake-up delay entirely; no code
+changes needed, since the app doesn't do anything sleep-tier-specific.
+
+**`PERSIST_RAW_EVENTS` is off in the Blueprint on purpose.** Render's free
+plan disk is ephemeral — wiped on every redeploy/restart — so writing to
+`data/raw-events.jsonl` in production would just silently lose data anyway.
+Re-enable it once raw-event capture moves to Supabase's `raw_events` table.
+
 ## Layout
 
 ```

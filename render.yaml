@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: saveit-ingest
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Disk on the free plan is ephemeral (wiped on every redeploy/restart),
+      # so local raw-event/parsed-save capture would just vanish. Leave off
+      # until persistence moves to Supabase's raw_events table.
+      - key: PERSIST_RAW_EVENTS
+        value: "false"
+      # Secrets: entered once in the Render dashboard when this Blueprint is
+      # applied (sync: false means Render prompts for a value instead of
+      # reading one from this file — never commit real values here).
+      - key: IG_VERIFY_TOKEN
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: IG_ACCESS_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
