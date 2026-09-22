@@ -3,7 +3,14 @@ services:
     name: saveit-ingest
     runtime: node
     plan: free
-    buildCommand: npm install && npm run build
+    # --include=dev is required: NODE_ENV=production below applies during the
+    # build too, and plain `npm install` silently skips devDependencies under
+    # NODE_ENV=production — which is where typescript, @types/node and
+    # @types/express live. Without this flag, tsc runs (it's resolved) but
+    # every Node/DOM global (process, Buffer, URL, fetch, console, ...) and
+    # @types/express fail to resolve, since only regular dependencies get
+    # installed.
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_ENV
