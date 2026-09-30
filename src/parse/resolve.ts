@@ -5,7 +5,8 @@ import type { PlaceCandidate } from './extract.js';
 const ENDPOINT = 'https://places.googleapis.com/v1/places:searchText';
 const TIMEOUT_MS = 8_000;
 /** Places bills by field tier — ask for nothing beyond what we store. */
-const FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.location';
+const FIELD_MASK =
+  'places.id,places.displayName,places.formattedAddress,places.location,places.businessStatus';
 
 export interface ResolvedPlace {
   placeId: string;
@@ -21,6 +22,7 @@ interface TextSearchResponse {
     displayName?: { text?: string };
     formattedAddress?: string;
     location?: { latitude?: number; longitude?: number };
+    businessStatus?: 'OPERATIONAL' | 'CLOSED_TEMPORARILY' | 'CLOSED_PERMANENTLY';
   }>;
 }
 
@@ -83,6 +85,22 @@ export async function resolvePlace(candidate: PlaceCandidate): Promise<ResolvedP
 
   if (!namesMatch(candidate.placeName, top.displayName.text)) {
     logger.info('rejected places result: name mismatch', {
+      extracted: candidate.placeName,
+      returned: top.displayName.text,
+    });
+    return null;
+  }
+
+  /*
+   * A permanently closed result is a real address for a place that no longer
+   * exists — confident-looking and completely useless. Surfaced concretely by
+   * a caption describing "the old Principe space": web search found the
+   * former tenant, Places confirmed a real business status, and without this
+   * check we'd have silently saved a dead restaurant. Temporarily closed is
+   * left alone; this app saves places to visit LATER, and one may reopen.
+   */
+  if (top.businessStatus === 'CLOSED_PERMANENTLY') {
+    logger.info('rejected places result: permanently closed', {
       extracted: candidate.placeName,
       returned: top.displayName.text,
     });
