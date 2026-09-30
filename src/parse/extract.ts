@@ -18,11 +18,15 @@ export const PlaceCandidateSchema = z.object({
   cuisine: z.string().nullable(),
   dishes: z.array(z.string()),
   /**
-   * Where the NAME came from. Deliberately named 'caption' vs 'pixels' rather
-   * than 'text' vs 'image': the model read "text" as including on-screen text
-   * overlays, which silently bypassed the confirmation gate.
+   * Where the NAME came from. Deliberately named 'caption'/'pixels'/'search'
+   * rather than 'text'/'image'/'tool': the model read "text" as including
+   * on-screen text overlays, which silently bypassed the confirmation gate.
+   * 'search' means the caption never stated the name and the model found it
+   * via web search (e.g. "the old Principe space in SoHo") — not stated by
+   * the poster themselves, so it gets the same confirm-with-sender treatment
+   * as a pixels-only guess.
    */
-  nameSource: z.enum(['caption', 'pixels']),
+  nameSource: z.enum(['caption', 'pixels', 'search']),
   /** Which signal the name came from, in prose. Invaluable while tuning. */
   evidence: z.string(),
 });
@@ -62,12 +66,15 @@ How places are named in captions:
 - The byline "<Name> on Instagram:" is usually the creator, not the venue — but when a restaurant posts its own food, the byline IS the venue. Judge from context.
 - When a brand has several locations, prefer the specific branch if one is identified (e.g. "YOKO-CHO by Suki Desu" or "Jacob's Pickles Moynihan" rather than the parent name), since the address differs per branch.
 - Narration phrasing like "this spot", "this place", "they serve" signals a venue is being discussed but does not name it. That alone is not enough.
+- Creators often locate a new business by referencing what used to occupy the space, e.g. "the old Principe space in SoHo" or "what used to be Joe's Pizza". The named business is EXPLICITLY EXCLUDED — "old" or "used to be" means it is gone. Never return that name; use web search to find what CURRENTLY occupies that address or space, and if search does not clearly identify a different, current, open business, return nothing rather than the former tenant.
+
+You have a web_search tool. Use it ONLY when the place cannot be named from the caption, note, or images alone — for indirect references like the one above, or to confirm which of several locations of a chain is meant when the caption implies a specific neighborhood but doesn't name it outright. Do not search to double-check a name you are already confident of; that wastes a call. A search-derived name still requires real evidence in the results — do not let the search induce a guess when the results are inconclusive; an empty result is still better than an unconfirmed one.
 
 Rules:
 - NEVER produce a street address, and never guess one. Return only the place name and any location hints you can actually see or read. Addresses are resolved afterwards from an authoritative source.
 - Only report location hints that are explicitly stated or visible. Do not infer a city from the cuisine, the language on a sign, or the look of a street.
 - If no specific place is named anywhere — not on screen, not in the caption, not in the sender's note — return an empty places array. An empty result is correct and useful. A guess is worse than nothing, because it gets silently resolved to a real address somewhere else in the world.
-- Set "nameSource" to "caption" ONLY when the name came from the caption, title, or the sender's note — that is, text supplied alongside the post. Set it to "pixels" whenever you read the name off the video or image, INCLUDING on-screen text overlays, signage, menus and watermarks. On-screen text counts as pixels, not caption. Be honest here: it decides whether the save is confirmed with the sender before being kept.
+- Set "nameSource" to "caption" ONLY when the name came from the caption, title, or the sender's note — that is, text supplied alongside the post. Set it to "pixels" whenever you read the name off the video or image, INCLUDING on-screen text overlays, signage, menus and watermarks — on-screen text counts as pixels, not caption. Set it to "search" whenever the web_search tool contributed the name. Be honest here: it decides whether the save is confirmed with the sender before being kept.
 - In "evidence", state concretely where the name came from, e.g. "neon sign above the door in frame 2", "pin emoji in the caption", or "the sender's note".`;
 
 function describeSignals(signals: SignalBundle, imageCount: number): string {
@@ -93,8 +100,12 @@ function describeSignals(signals: SignalBundle, imageCount: number): string {
 export function buildExtractionRequest(signals: SignalBundle, images: ImageInput[]) {
   return {
     model: MODEL,
-    max_tokens: 1024,
+    // Higher than a text-only call needs: a turn that uses web_search carries
+    // the search results plus the model's follow-up reasoning before the
+    // final structured output.
+    max_tokens: 4096,
     system: SYSTEM,
+    tools: [{ type: 'web_search_20250305' as const, name: 'web_search' as const, max_uses: 2 }],
     messages: [
       {
         role: 'user' as const,
@@ -137,13 +148,20 @@ export async function extractPlaces(
   /*
    * Reels routinely burn the caption into the video as an overlay, and the
    * model reads that as "caption" however the instruction is worded. But we
-   * know what text we actually supplied — so when none was, provenance can only
-   * be the pixels. Don't ask the model for something already known here.
+   * know what text we actually supplied — so when none was, a claimed
+   * "caption" provenance is necessarily wrong and must have been read off the
+   * pixels instead. A claimed "search" provenance is left alone even when we
+   * supplied no text: the model can legitimately search off something read
+   * from an image (e.g. a sign), and that still needs confirmation as
+   * 'search' — collapsing it into 'pixels' would just lose the distinction,
+   * not add safety, since both are already gated the same way downstream.
    */
   const hadText = Boolean(signals.userNote) || signals.titles.length > 0;
 
   return response.parsed_output.places
     .filter((place) => place.placeName !== null)
-    .map((place) => (hadText ? place : { ...place, nameSource: 'pixels' as const }))
+    .map((place) =>
+      !hadText && place.nameSource === 'caption' ? { ...place, nameSource: 'pixels' as const } : place,
+    )
     .slice(0, MAX_PLACES);
 }

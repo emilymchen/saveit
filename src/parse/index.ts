@@ -61,13 +61,15 @@ export async function parseSignals(signals: SignalBundle): Promise<ParsedSave> {
   }
 
   /*
-   * A name read off the pixels with no text backing it is the dangerous case:
-   * signage routinely shows a vendor, sub-brand or dish rather than the venue,
-   * and Places will happily resolve that to a real address somewhere else. The
-   * name-match guard cannot catch it — it only checks Places against whatever
-   * name we extracted, not whether that name was the right one. So confirm.
+   * A name the SENDER never actually stated is the dangerous case — read off
+   * the pixels, or found by the model via web search. Both misfire the same
+   * way: signage routinely shows a vendor or sub-brand rather than the venue,
+   * and a search can surface a plausible but wrong business for an indirect
+   * reference. Places' own guard only checks its result against whatever name
+   * we extracted, not whether that name was the right one to search for. So
+   * confirm anything the sender themselves didn't write.
    */
-  const unconfirmed = resolved.some((p) => p.candidate.nameSource === 'pixels');
+  const unconfirmed = resolved.some((p) => p.candidate.nameSource !== 'caption');
 
   return {
     places,
