@@ -46,8 +46,23 @@ export function namesMatch(extracted: string, returned: string): boolean {
   const wanted = tokenize(extracted);
   const got = new Set(tokenize(returned));
   if (wanted.length === 0 || got.size === 0) return false;
+
+  /*
+   * Businesses are inconsistent about spacing their own name: a caption saying
+   * "Sour Aji" resolves to a Places listing called "SourAji" at exactly the
+   * address the caption gave, and token overlap scores that zero. Compare the
+   * punctuation- and space-stripped forms too. Equality only, not containment —
+   * containment would let "Bar" match "Barcelona".
+   */
+  if (squash(extracted) === squash(returned)) return true;
+
   const hits = wanted.filter((token) => got.has(token)).length;
   return hits / wanted.length >= 0.5;
+}
+
+/** Lowercased, de-accented, stripped of everything but letters and digits. */
+function squash(value: string): string {
+  return tokenize(value).join('');
 }
 
 function buildQuery(candidate: PlaceCandidate): string {
