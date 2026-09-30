@@ -8,11 +8,11 @@
 --   NormalizedMessage -> src/ingest/types.ts
 --   ParsedSave / FollowupReason -> src/parse/index.ts
 --
--- RLS is deliberately left off: only the trusted backend touches this
--- database, via the service_role key (which bypasses RLS by design). RLS
--- policies become relevant once a client (the future iOS app, or this web
--- view if it gets real per-user auth) talks to Supabase directly with a
--- user's own token.
+-- RLS is off by default: only the trusted backend touches most of this
+-- database, via the service_role key (which bypasses RLS by design). It's
+-- turned on below for the two tables the iOS app touches directly with a
+-- user's own token (`saves`, `link_codes`) — everything else stays
+-- service_role-only, unreachable without the secret key.
 
 -- One row per Instagram account that has ever DM'd the bot. auth_user_id
 -- stays null until an account-linking flow exists.
@@ -66,3 +66,26 @@ create table saves (
 create index on messages (sender_igsid);
 create index on saves (sender_igsid);
 create index on saves (created_at desc);
+
+-- Short-lived proof-of-ownership codes: a signed-in user generates one in the
+-- iOS app, DMs it to the bot, and the bot links that IGSID's sender row to
+-- their account. Claimed via a single conditional UPDATE in linking.ts (not
+-- select-then-update), so two concurrent deliveries of the same code can't
+-- both succeed.
+create table link_codes (
+  code          text primary key,
+  auth_user_id  uuid not null references auth.users(id),
+  created_at    timestamptz not null default now(),
+  expires_at    timestamptz not null,
+  used_at       timestamptz
+);
+
+alter table saves enable row level security;
+create policy "own saves" on saves for select
+  using (sender_igsid in (select igsid from senders where auth_user_id = auth.uid()));
+
+alter table link_codes enable row level security;
+create policy "own codes: insert" on link_codes for insert
+  with check (auth_user_id = auth.uid());
+create policy "own codes: read" on link_codes for select
+  using (auth_user_id = auth.uid());

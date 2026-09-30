@@ -1,6 +1,7 @@
 import { logger } from '../lib/logger.js';
 import { parseMessage } from '../parse/index.js';
 import { isDuplicate } from './dedupe.js';
+import { tryHandleLinkCode } from './linking.js';
 import { extractEvents, normalizeEvent } from './normalize.js';
 import { insertMessage, insertSaves, updateMessageFollowup, upsertSender } from './persist.js';
 import type { IgWebhookBody, NormalizedMessage } from './types.js';
@@ -76,6 +77,11 @@ async function handleMessage(message: NormalizedMessage): Promise<void> {
     links: message.links.map((l) => `${l.platform}/${l.kind}:${l.url}`),
     isStoryReply: message.isStoryReply,
   });
+
+  // A link code ("DM this to connect your account") is a command, never a
+  // place to save — checked and short-circuited before anything else touches
+  // this message, so it can never reach Claude/Places.
+  if (await tryHandleLinkCode(message)) return;
 
   await upsertSender(message.senderIgsid);
 
