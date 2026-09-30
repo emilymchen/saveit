@@ -145,6 +145,17 @@ This is deliberately the whole viewing surface for now — no real per-user
 auth, no native app. It exists so a save is actually visible to someone,
 not just a log line, while the real client (iOS, presumably) is future work.
 
+## iOS app
+
+Lives in [ios/](ios/) — see [ios/README.md](ios/README.md) for setup (it's a
+source tree, not a checked-in `.xcodeproj`; you create the project via
+Xcode's wizard and drop the files in). It talks to Supabase directly with the
+publishable key, not through this backend — RLS policies in
+`supabase/schema.sql` are what actually enforce that a signed-in user only
+sees their own saves. Account linking (proving a signed-in person owns a
+given Instagram account) is a short code generated in the app and DMed to the
+bot; see `src/ingest/linking.ts`.
+
 ## Connecting the real webhook
 
 1. Your Instagram account must be a **Professional** account (Business or Creator)
@@ -224,6 +235,7 @@ src/
     normalize.ts        envelope -> NormalizedMessage, with skip rules
     dedupe.ts           process-local mid guard against Meta retries
     persist.ts          senders/messages/saves writes; durable dedupe
+    linking.ts          DM-code account linking; sets senders.auth_user_id
     rawEvents.ts        raw payload capture for parser design
     process.ts          async pipeline; where the confirmation DM plugs in
   parse/
@@ -237,7 +249,10 @@ scripts/
   parse-file.ts         run the parser against a local post file
   inspect-events.mjs    pretty-print captured raw payloads
 supabase/
-  schema.sql            senders/messages/saves — paste into the SQL editor once
+  schema.sql            senders/messages/saves/link_codes + RLS — paste into the SQL editor
+ios/
+  README.md             Xcode project setup steps (no checked-in .xcodeproj)
+  SaveIt/               SwiftUI source: sign-in, account linking, saves list
 ```
 
 ## Design notes
@@ -309,3 +324,14 @@ something we chose. `extractEvents()` in `normalize.ts` flattens both. The
 `changes` envelope also sends `timestamp` as a numeric *string* in epoch
 *seconds*, versus a `number` in epoch milliseconds on the `messaging` envelope;
 `parseEventTimestamp()` normalizes both.
+
+**On Supabase, RLS off means open, not closed.** A table without RLS enabled
+is readable and writable by anyone holding the publishable key — which ships
+inside the iOS app binary, so it's effectively public. "Only the backend
+touches this table" is not enforced by leaving RLS off; it's enforced by
+turning RLS *on* with no policies, since the backend's service_role key
+bypasses RLS regardless. `messages` is locked down exactly that way (raw DM
+text has no business being client-readable); `saves`, `senders` and
+`link_codes` get narrow `auth.uid()`-scoped policies. Any new table needs an
+explicit `enable row level security` — Supabase's own SQL editor warns about
+this, and the warning is correct.

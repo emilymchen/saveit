@@ -8,11 +8,13 @@
 --   NormalizedMessage -> src/ingest/types.ts
 --   ParsedSave / FollowupReason -> src/parse/index.ts
 --
--- RLS is off by default: only the trusted backend touches most of this
--- database, via the service_role key (which bypasses RLS by design). It's
--- turned on below for the two tables the iOS app touches directly with a
--- user's own token (`saves`, `link_codes`) — everything else stays
--- service_role-only, unreachable without the secret key.
+-- IMPORTANT: on Supabase, RLS *off* does not mean "service_role only" — it
+-- means open to anon/authenticated by default. Every table below gets RLS
+-- turned on explicitly: `saves`/`senders` get a narrow "your own row" policy
+-- (for the iOS app), `link_codes` gets insert/read-your-own policies, and
+-- `messages` gets RLS on with zero policies (deliberate full lockdown — no
+-- client ever has a legitimate reason to read raw DM text). service_role
+-- bypasses RLS entirely regardless, which is how the backend keeps working.
 
 -- One row per Instagram account that has ever DM'd the bot. auth_user_id
 -- stays null until an account-linking flow exists.
@@ -84,8 +86,17 @@ alter table saves enable row level security;
 create policy "own saves" on saves for select
   using (sender_igsid in (select igsid from senders where auth_user_id = auth.uid()));
 
+alter table senders enable row level security;
+create policy "own sender row" on senders for select
+  using (auth_user_id = auth.uid());
+
 alter table link_codes enable row level security;
 create policy "own codes: insert" on link_codes for insert
   with check (auth_user_id = auth.uid());
 create policy "own codes: read" on link_codes for select
   using (auth_user_id = auth.uid());
+
+-- Full lockdown, on purpose: RLS on, no policies at all. No client (iOS or
+-- otherwise) has a legitimate reason to read raw DM text/captions directly;
+-- the backend's service_role connection is unaffected since it bypasses RLS.
+alter table messages enable row level security;
