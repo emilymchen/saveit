@@ -64,7 +64,19 @@ async function handleMessage(message: NormalizedMessage): Promise<void> {
     from: message.senderIgsid,
     sentAt: message.sentAt.toISOString(),
     text: message.text,
-    attachments: message.attachments.map((a) => a.type),
+    // Raw events are not persisted in production, so this is the only record of
+    // which fields Meta actually sends per attachment type. ig_post delivers a
+    // fetchable lookaside media URL; ig_reel delivers a permalink we cannot
+    // read, so whether it carries a usable media id elsewhere matters.
+    attachments: message.attachments.map((a) => ({
+      type: a.type,
+      payload: Object.fromEntries(
+        Object.entries(a.payload ?? {}).map(([k, v]) => [
+          k,
+          typeof v === 'string' && v.length > 140 ? `${v.slice(0, 140)}…` : v,
+        ]),
+      ),
+    })),
     titles: message.attachments.map((a) => a.payload?.title).filter(Boolean),
     links: message.links.map((l) => `${l.platform}/${l.kind}:${l.url}`),
     isStoryReply: message.isStoryReply,
