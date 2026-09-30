@@ -1,5 +1,6 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { logger } from './lib/logger.js';
+import { savesRouter } from './routes/saves.js';
 import { webhookRouter } from './routes/webhook.js';
 
 export function createApp(): Express {
@@ -26,6 +27,7 @@ export function createApp(): Express {
   });
 
   app.use('/webhook', webhookRouter);
+  app.use('/saves', savesRouter);
 
   app.use((_req, res) => {
     res.sendStatus(404);

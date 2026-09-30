@@ -18,6 +18,13 @@ const schema = z.object({
   // webhook setup, before any parsing keys exist. Parsing skips itself instead.
   ANTHROPIC_API_KEY: z.string().optional(),
   GOOGLE_MAPS_API_KEY: z.string().optional(),
+  // Persistence is core, not optional like the parsing keys above: a save
+  // that can't be written anywhere isn't a save.
+  SUPABASE_URL: z.string().min(1, 'SUPABASE_URL is required'),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, 'SUPABASE_SERVICE_ROLE_KEY is required'),
+  // Gates GET /saves (HTTP Basic Auth, fixed username) — the internal viewer
+  // until real per-user auth exists.
+  ADMIN_VIEW_PASSWORD: z.string().min(1, 'ADMIN_VIEW_PASSWORD is required'),
 });
 
 const parsed = schema.safeParse(process.env);

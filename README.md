@@ -9,9 +9,10 @@ user DMs a post  ->  [ Meta webhook ]  ->  THIS SERVER  ->  Supabase  ->  iOS ap
                                    ingest + AI parsing + place resolution
 ```
 
-Ingestion, parsing and place resolution are built. Persistence and the
-confirmation DM back to the sender are not — they plug in at `handleMessage()`
-in [src/ingest/process.ts](src/ingest/process.ts).
+Ingestion, parsing, place resolution and persistence are built. The
+confirmation DM back to the sender is not — it plugs in at `handleMessage()`
+in [src/ingest/process.ts](src/ingest/process.ts), after the `insertSaves`
+call. Saves can be browsed at `/saves` — see [Viewing saves](#viewing-saves).
 
 **The video is the signal.** Meta delivers no caption: the attachment `title`
 field is documented but undefined as a caption, and the Instagram-specific docs
@@ -50,6 +51,18 @@ Video frame extraction needs `ffmpeg` on the PATH (`brew install ffmpeg`).
 Without it, images still work and videos are skipped.
 
 `IG_ACCESS_TOKEN` is only needed later, when the bot starts replying to users.
+
+Persistence needs three more, and is not optional — a save that can't be
+written anywhere isn't a save:
+
+| Variable | Where it comes from |
+| --- | --- |
+| `SUPABASE_URL` | Supabase project → Project Settings → API. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Same page — the `service_role` key, not `anon`. This is a trusted backend, not a browser. |
+| `ADMIN_VIEW_PASSWORD` | You invent it. Gates `GET /saves` (HTTP Basic Auth, username `admin`) — the internal saves viewer until real per-user auth exists. |
+
+After creating the Supabase project, paste [supabase/schema.sql](supabase/schema.sql)
+into its SQL editor once to create the `senders`/`messages`/`saves` tables.
 
 ## Running
 
@@ -114,6 +127,18 @@ Verified behavior as of the initial commit:
 | Forged signature | `403`, no processing |
 | Same `mid` delivered twice | `200` both times, processed once |
 
+## Viewing saves
+
+`GET /saves` renders a plain server-side HTML table of everything in the
+`saves` table, newest first — no frontend framework, no build step, served
+from this same Express app. Gated by HTTP Basic Auth (username `admin`,
+password is `ADMIN_VIEW_PASSWORD`). Filter to one sender with
+`GET /saves?igsid=<id>` (also linked from each row).
+
+This is deliberately the whole viewing surface for now — no real per-user
+auth, no native app. It exists so a save is actually visible to someone,
+not just a log line, while the real client (iOS, presumably) is future work.
+
 ## Connecting the real webhook
 
 1. Your Instagram account must be a **Professional** account (Business or Creator)
@@ -149,7 +174,10 @@ that gives you a permanent, laptop-independent URL on the free tier:
    run build`) and start (`npm start`) commands automatically.
 3. When prompted, fill in the secret env vars (`IG_VERIFY_TOKEN`,
    `META_APP_SECRET`, `IG_ACCESS_TOKEN`, `ANTHROPIC_API_KEY`,
-   `GOOGLE_MAPS_API_KEY`) with the same values as your local `.env`.
+   `GOOGLE_MAPS_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
+   `ADMIN_VIEW_PASSWORD`) with the same values as your local `.env`. Render
+   only prompts for vars that are new since the Blueprint was first applied —
+   adding one later means setting it manually in the dashboard.
 4. Deploy. You get a permanent URL like `https://saveit-ingest.onrender.com`.
 5. Update the Meta App Dashboard callback URL to
    `https://saveit-ingest.onrender.com/webhook`, save (re-triggers the GET
@@ -170,7 +198,8 @@ changes needed, since the app doesn't do anything sleep-tier-specific.
 **`PERSIST_RAW_EVENTS` is off in the Blueprint on purpose.** Render's free
 plan disk is ephemeral — wiped on every redeploy/restart — so writing to
 `data/raw-events.jsonl` in production would just silently lose data anyway.
-Re-enable it once raw-event capture moves to Supabase's `raw_events` table.
+The real persistence layer is Supabase now; this local file stays a dev-only
+capture aid for designing the parser against real payloads.
 
 ## Layout
 
@@ -180,14 +209,17 @@ src/
   app.ts                express wiring, raw-body capture
   config.ts             env validation; fails fast at boot
   routes/webhook.ts     GET handshake + signed POST receiver
+  routes/saves.ts       GET /saves — internal viewer, Basic Auth gated
   lib/signature.ts      X-Hub-Signature-256 HMAC verification
   lib/logger.ts         pretty in dev, JSON lines in prod
+  lib/supabase.ts       service_role client, lazy-initialized
   ingest/
     types.ts            Meta envelope types + NormalizedMessage
     normalize.ts        envelope -> NormalizedMessage, with skip rules
     dedupe.ts           process-local mid guard against Meta retries
+    persist.ts          senders/messages/saves writes; durable dedupe
     rawEvents.ts        raw payload capture for parser design
-    process.ts          async pipeline; where the DB plugs in
+    process.ts          async pipeline; where the confirmation DM plugs in
   parse/
     signals.ts          NormalizedMessage -> SignalBundle
     media.ts            fetch + ffmpeg frames, behind a host allowlist
@@ -198,6 +230,8 @@ scripts/
   send-test-webhook.mjs signed local payload generator
   parse-file.ts         run the parser against a local post file
   inspect-events.mjs    pretty-print captured raw payloads
+supabase/
+  schema.sql            senders/messages/saves — paste into the SQL editor once
 ```
 
 ## Design notes
@@ -215,9 +249,12 @@ slow AI calls can never cause a redelivery storm.
 messages come back as webhook events with `is_echo: true`. Ingesting them makes
 the bot respond to itself.
 
-**Dedupe is currently process-local.** `dedupe.ts` is an in-memory TTL map; it
-does not survive a restart or span instances. The durable guard is a `UNIQUE`
-constraint on the message id in Postgres, added when persistence lands.
+**Dedupe has two layers now.** `dedupe.ts`'s in-memory TTL map is a fast path
+that catches a retry within one process's lifetime without a DB round trip.
+The durable guard is the `UNIQUE` constraint on `messages.mid` in
+`persist.ts`'s `insertMessage()` — inserted *before* the Claude/Places calls,
+specifically so a retried delivery after a restart (in-memory map empty)
+doesn't pay for a second parse instead of just being dropped.
 
 **We do not scrape Instagram for captions.** Fetching `og:description` off a
 permalink would often yield a truncated caption, and was considered and

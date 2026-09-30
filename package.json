@@ -13,7 +13,7 @@
     "start": "node dist/index.js",
     "start:local": "node --env-file=.env dist/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "NODE_ENV=test IG_VERIFY_TOKEN=test META_APP_SECRET=test tsx --test 'src/**/*.test.ts'",
+    "test": "NODE_ENV=test IG_VERIFY_TOKEN=test META_APP_SECRET=test SUPABASE_URL=http://localhost SUPABASE_SERVICE_ROLE_KEY=test ADMIN_VIEW_PASSWORD=test tsx --test src/**/*.test.ts",
     "parse": "tsx --env-file=.env scripts/parse-file.ts",
     "webhook:test": "node --env-file=.env scripts/send-test-webhook.mjs",
     "events": "node scripts/inspect-events.mjs",
@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.127.0",
+    "@supabase/supabase-js": "^2.109.0",
     "express": "^5.1.0",
     "zod": "^4.6.5"
   },

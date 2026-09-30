@@ -16,13 +16,16 @@ services:
       - key: NODE_ENV
         value: production
       # Disk on the free plan is ephemeral (wiped on every redeploy/restart),
-      # so local raw-event/parsed-save capture would just vanish. Leave off
-      # until persistence moves to Supabase's raw_events table.
+      # so local raw-event/parsed-save capture would just vanish. The real
+      # persistence layer is Supabase (senders/messages/saves) now, not a
+      # local file, so this stays off in production either way.
       - key: PERSIST_RAW_EVENTS
         value: "false"
       # Secrets: entered once in the Render dashboard when this Blueprint is
       # applied (sync: false means Render prompts for a value instead of
-      # reading one from this file — never commit real values here).
+      # reading one from this file — never commit real values here). Render
+      # will also prompt for any of these that are new since the service was
+      # first created — they don't get picked up automatically on redeploy.
       - key: IG_VERIFY_TOKEN
         sync: false
       - key: META_APP_SECRET
@@ -32,4 +35,10 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: GOOGLE_MAPS_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: ADMIN_VIEW_PASSWORD
         sync: false

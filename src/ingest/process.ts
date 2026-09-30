@@ -2,6 +2,7 @@ import { logger } from '../lib/logger.js';
 import { parseMessage } from '../parse/index.js';
 import { isDuplicate } from './dedupe.js';
 import { extractEvents, normalizeEvent } from './normalize.js';
+import { insertMessage, insertSaves, updateMessageFollowup, upsertSender } from './persist.js';
 import type { IgWebhookBody, NormalizedMessage } from './types.js';
 
 /**
@@ -11,10 +12,8 @@ import type { IgWebhookBody, NormalizedMessage } from './types.js';
  * acknowledges immediately and hands the body here. Nothing in this path may
  * throw into the request lifecycle — every message is isolated.
  *
- * Today this is an in-process call. When AI parsing lands it becomes real work
- * (an OpenAI round trip, a Places lookup, a DB write) and should move behind a
- * durable queue — pg-boss on the Supabase database is the natural next step —
- * so a crash mid-parse does not silently drop a user's save.
+ * Next milestone: DM the sender a confirmation, or a question when
+ * needsFollowup is set. Persistence (this function) now lands before that.
  */
 export async function processWebhookBody(body: IgWebhookBody): Promise<void> {
   const events = extractEvents(body);
@@ -34,6 +33,9 @@ export async function processWebhookBody(body: IgWebhookBody): Promise<void> {
 
     const message = result.message;
 
+    // Fast path only: catches a retry within this process's lifetime without
+    // a DB round trip. insertMessage()'s unique constraint below is the
+    // durable guard that survives a restart.
     if (isDuplicate(message.mid)) {
       logger.debug('skipped event', { reason: 'duplicate', mid: message.mid });
       continue;
@@ -51,29 +53,46 @@ export async function processWebhookBody(body: IgWebhookBody): Promise<void> {
   }
 }
 
-/**
- * The seam where the rest of the pipeline plugs in.
- *
- * Next milestones, in order:
- *   1. upsert the sender (IGSID) and persist the message + result to Supabase
- *   2. DM the sender a confirmation, or a question when needsFollowup is set
- */
 async function handleMessage(message: NormalizedMessage): Promise<void> {
   logger.info('inbound DM', {
     mid: message.mid,
     from: message.senderIgsid,
     sentAt: message.sentAt.toISOString(),
     text: message.text,
-    attachments: message.attachments.map((a) => a.type),
+    // Raw events are not persisted in production, so this is the only record of
+    // which fields Meta actually sends per attachment type. ig_post delivers a
+    // fetchable lookaside media URL; ig_reel delivers a permalink we cannot
+    // read, so whether it carries a usable media id elsewhere matters.
+    attachments: message.attachments.map((a) => ({
+      type: a.type,
+      payload: Object.fromEntries(
+        Object.entries(a.payload ?? {}).map(([k, v]) => [
+          k,
+          typeof v === 'string' && v.length > 140 ? `${v.slice(0, 140)}…` : v,
+        ]),
+      ),
+    })),
+    titles: message.attachments.map((a) => a.payload?.title).filter(Boolean),
     links: message.links.map((l) => `${l.platform}/${l.kind}:${l.url}`),
     isStoryReply: message.isStoryReply,
   });
 
+  await upsertSender(message.senderIgsid);
+
+  // Inserted before parsing, on purpose: this is the durable dedupe guard, so
+  // it must land before any Claude/Places calls, or a retried delivery after
+  // a restart (in-memory map above empty) would pay for a second parse.
+  const inserted = await insertMessage(message);
+  if (inserted.duplicate) {
+    logger.debug('skipped event', { reason: 'duplicate-db', mid: message.mid });
+    return;
+  }
+
   const result = await parseMessage(message);
+  await updateMessageFollowup(inserted.id, result.needsFollowup, result.reason);
 
   if (result.needsFollowup) {
     logger.info('save needs follow-up', { mid: message.mid, reason: result.reason });
-    return;
   }
 
   for (const { candidate, resolved } of result.places) {
@@ -85,4 +104,6 @@ async function handleMessage(message: NormalizedMessage): Promise<void> {
       evidence: candidate.evidence,
     });
   }
+
+  await insertSaves(inserted.id, message.senderIgsid, result.places);
 }
