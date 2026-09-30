@@ -13,12 +13,18 @@ Ingestion, parsing and place resolution are built. Persistence and the
 confirmation DM back to the sender are not — they plug in at `handleMessage()`
 in [src/ingest/process.ts](src/ingest/process.ts).
 
-**The video is the signal.** Meta delivers no caption: the attachment `title`
-field is documented but undefined as a caption, and the Instagram-specific docs
-say [only a URL is
+**The caption is the signal.** Meta delivers it in the attachment's `title`
+field, despite the Instagram-specific docs claiming [only a URL is
 delivered](https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api).
-So the place name is read off the pixels — storefront signage, text overlays,
-the name card at the end of a reel. Text is opportunistic enrichment.
+Confirmed against a real DM: an `ig_post` share arrived carrying the caption,
+and the place resolved from the `@handle` and 📍 pin inside it.
+
+So the caption names the place and the video confirms it, falling back to the
+pixels only when no text names one. On a six-post test batch that ordering was
+the difference between 6/6 and 3/6 correct. A name read off the pixels alone is
+marked `nameSource: "pixels"` and routed to a confirmation with the sender
+rather than saved silently — signage routinely shows a vendor, a sub-brand, or
+the creator's own watermark rather than the venue itself.
 
 The model is never asked for a street address; it returns a name and location
 hints, and Google Places resolves those to a verified address. A hallucinated
@@ -222,8 +228,9 @@ constraint on the message id in Postgres, added when persistence lands.
 **We do not scrape Instagram for captions.** Fetching `og:description` off a
 permalink would often yield a truncated caption, and was considered and
 rejected: it breaches Instagram's ToS, gets login-walled from datacenter IPs,
-and needs crawler user-agent spoofing to work reliably. Reading the video frames
-is both legitimate and more accurate. `instagram_oembed` is not an alternative —
+and needs crawler user-agent spoofing to work reliably. It is also unnecessary,
+since Meta delivers the caption in `payload.title`. `instagram_oembed` is not an
+alternative —
 it returns only `html`, `provider_name`, `provider_url`, `type`, `version` and
 `width`.
 
