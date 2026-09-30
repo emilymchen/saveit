@@ -26,6 +26,20 @@ test('rejects a result sharing only one word of several', () => {
   assert.equal(namesMatch('Golden Gate Bakery Company', 'Golden Corral'), false);
 });
 
+test('matches across spacing and punctuation differences', () => {
+  // Real case: caption said "Sour Aji", Places listed it as "SourAji" at the
+  // exact address the caption gave, and token overlap scored it zero.
+  assert.ok(namesMatch('Sour Aji', 'SourAji'));
+  assert.ok(namesMatch('SourAji', 'Sour Aji'));
+  assert.ok(namesMatch("Jacob's Pickles", 'Jacobs Pickles'));
+});
+
+test('does not let the spacing rule collapse distinct names', () => {
+  // Squashed comparison is equality-only; containment would match these.
+  assert.equal(namesMatch('Bar', 'Barcelona'), false);
+  assert.equal(namesMatch('Layln', 'LALYN'), false);
+});
+
 test('rejects empty input rather than treating it as a match', () => {
   assert.equal(namesMatch('', 'Tartine'), false);
   assert.equal(namesMatch('Tartine', ''), false);
