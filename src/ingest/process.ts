@@ -65,6 +65,7 @@ async function handleMessage(message: NormalizedMessage): Promise<void> {
     sentAt: message.sentAt.toISOString(),
     text: message.text,
     attachments: message.attachments.map((a) => a.type),
+    titles: message.attachments.map((a) => a.payload?.title).filter(Boolean),
     links: message.links.map((l) => `${l.platform}/${l.kind}:${l.url}`),
     isStoryReply: message.isStoryReply,
   });
